@@ -64,7 +64,7 @@ On the first run it will walk you through choosing your two inputs and hotkey, t
 
 > **Windows startup:** after setup you'll be asked whether to start automatically with Windows. This writes a single value to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` — no admin rights required. You can enable or disable it at any time by pressing `ESC` to reconfigure and navigating back to the startup screen.
 >
-> **Note:** Windows startup is untested — there are known issues with startup apps on some Windows installations that may prevent it from working reliably.
+> **Note:** Windows startup has not been fully tested — my machine has unrelated issues with startup apps, so this feature may or may not work on your system.
 
 > **Console window:** the hotkey listener only works while the console window is running — you can minimize it, but closing it stops the listener. Minimizing to the system tray is not supported.
 
