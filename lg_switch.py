@@ -5,7 +5,11 @@ lg-switch — LG 45GX950A-B input switcher for Windows
 
 import argparse
 import ctypes
+import ctypes.wintypes
+import json
 import sys
+import time
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Input source values (LG-specific, sent via proprietary VCP code 0xF4)
@@ -22,7 +26,127 @@ DDC_DEVICE_ADDR = 0x6E    # 0x37 << 1  (DDC/CI destination address)
 NVAPI_OK        = 0
 NVAPI_MAX_GPUS  = 64
 
+CONFIG_PATH = Path(__file__).parent / "config.json"
+
 _verbose = False
+
+# ---------------------------------------------------------------------------
+# Hotkey parsing (Win32 RegisterHotKey)
+# ---------------------------------------------------------------------------
+MODIFIERS: dict[str, int] = {
+    "ctrl":    0x0002,
+    "control": 0x0002,
+    "alt":     0x0001,
+    "shift":   0x0004,
+    "win":     0x0008,
+}
+MOD_NOREPEAT = 0x4000
+
+VK_CODES: dict[str, int] = {
+    **{chr(c): 0x41 + i for i, c in enumerate(range(ord("a"), ord("z") + 1))},
+    **{str(d): 0x30 + d for d in range(10)},
+    **{f"f{n}": 0x6F + n for n in range(1, 13)},
+    "space":    0x20,
+    "enter":    0x0D,
+    "esc":      0x1B,
+    "escape":   0x1B,
+    "tab":      0x09,
+    "insert":   0x2D,
+    "delete":   0x2E,
+    "home":     0x24,
+    "end":      0x23,
+    "pageup":   0x21,
+    "pagedown": 0x22,
+    "left":     0x25,
+    "right":    0x27,
+    "up":       0x26,
+    "down":     0x28,
+    **{f"numpad{d}": 0x60 + d for d in range(10)},
+    "numpad*": 0x6A, "numpadmultiply": 0x6A,
+    "numpad+": 0x6B, "numpadadd":      0x6B,
+    "numpad-": 0x6D, "numpadsubtract": 0x6D,
+    "numpad.": 0x6E, "numpaddecimal":  0x6E,
+    "numpad/": 0x6F, "numpaddivide":   0x6F,
+    # OEM symbols (US layout)
+    ";":  0xBA, ":":  0xBA,
+    "=":  0xBB, "+":  0xBB,
+    ",":  0xBC, "<":  0xBC,
+    "-":  0xBD, "_":  0xBD,
+    ".":  0xBE, ">":  0xBE,
+    "/":  0xBF, "?":  0xBF,
+    "`":  0xC0, "~":  0xC0,
+    "[":  0xDB, "{":  0xDB,
+    "\\": 0xDC, "|":  0xDC,
+    "]":  0xDD, "}":  0xDD,
+    "'":  0xDE, "\"": 0xDE,
+}
+
+
+def parse_hotkey(hotkey: str) -> tuple[int, int]:
+    """Parse 'ctrl+shift+d' into (modifier_flags, vk_code). Raises ValueError on bad input.
+
+    Handles '+' as the key itself: 'ctrl++' or 'ctrl+shift++' — consecutive '+' signs
+    (which produce empty tokens after split) are collapsed into a single '+' token.
+    """
+    raw_tokens = hotkey.split("+")
+    # Collapse runs of empty strings (produced by ++ in input) into a single "+" token
+    tokens = []
+    i = 0
+    while i < len(raw_tokens):
+        if raw_tokens[i] == "":
+            tokens.append("+")
+            while i < len(raw_tokens) and raw_tokens[i] == "":
+                i += 1
+        else:
+            tokens.append(raw_tokens[i].strip().lower())
+            i += 1
+    mods = 0
+    vk   = None
+    for token in tokens:
+        if token in MODIFIERS:
+            mods |= MODIFIERS[token]
+        elif token in VK_CODES:
+            if vk is not None:
+                raise ValueError(f"multiple non-modifier keys in hotkey: '{hotkey}'")
+            vk = VK_CODES[token]
+        else:
+            raise ValueError(f"unrecognised hotkey token: '{token}'")
+    if vk is None:
+        raise ValueError(f"hotkey has no non-modifier key: '{hotkey}'")
+    return mods, vk
+
+
+# ---------------------------------------------------------------------------
+# Config file helpers
+# ---------------------------------------------------------------------------
+def _load_config() -> dict:
+    if not CONFIG_PATH.exists():
+        sys.exit(
+            f"error: config.json not found — run 'python lg_switch.py configure' first"
+        )
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+    except json.JSONDecodeError as exc:
+        sys.exit(f"error: config.json is not valid JSON: {exc}")
+
+    for key in ("hotkey", "inputs"):
+        if key not in cfg:
+            sys.exit(f"error: config.json is missing '{key}' — re-run configure")
+    if not isinstance(cfg["inputs"], list) or len(cfg["inputs"]) != 2:
+        sys.exit("error: config.json 'inputs' must be a list of exactly two input names")
+    for inp in cfg["inputs"]:
+        if inp not in INPUTS:
+            sys.exit(f"error: config.json contains unknown input '{inp}'")
+    try:
+        parse_hotkey(cfg["hotkey"])
+    except ValueError as exc:
+        sys.exit(f"error: config.json hotkey invalid: {exc}")
+
+    return cfg
+
+
+def _save_config(cfg: dict) -> None:
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n")
 
 
 def log(msg: str) -> None:
@@ -209,6 +333,98 @@ def _i2c_write(lib: ctypes.CDLL, gpu, masks: list[int], packet: list[int]) -> bo
 
 
 # ---------------------------------------------------------------------------
+# configure / daemon commands
+# ---------------------------------------------------------------------------
+def cmd_configure() -> None:
+    """Interactive setup — writes config.json."""
+    print("Available inputs:", ", ".join(INPUTS))
+    print()
+
+    def prompt_input(label: str, exclude: str | None = None) -> str:
+        while True:
+            val = input(f"{label}: ").strip().lower()
+            if val not in INPUTS:
+                print(f"  Invalid input '{val}'. Choose from: {', '.join(INPUTS)}")
+                continue
+            if exclude is not None and val == exclude:
+                print(f"  Second input must differ from the first ('{exclude}').")
+                continue
+            return val
+
+    first  = prompt_input("First input")
+    second = prompt_input("Second input", exclude=first)
+
+    while True:
+        raw = input("Hotkey — type it as text, e.g. ctrl+shift+d: ").strip()
+        try:
+            parse_hotkey(raw)
+            break
+        except ValueError as exc:
+            print(f"  {exc}")
+
+    cfg = {"hotkey": raw, "inputs": [first, second]}
+    _save_config(cfg)
+    print(f"\nSaved to {CONFIG_PATH}")
+    print(f"  hotkey : {raw}")
+    print(f"  inputs : {first} ↔ {second}")
+
+
+def cmd_daemon() -> None:
+    """Listen for the configured hotkey and toggle between two inputs."""
+    cfg   = _load_config()
+    mods, vk = parse_hotkey(cfg["hotkey"])
+    inputs   = cfg["inputs"]
+
+    lib        = _load_nvapi()
+    gpu, masks = _nvapi_setup(lib)
+
+    user32 = ctypes.WinDLL("user32")
+    WM_HOTKEY = 0x0312
+    HOTKEY_ID = 1
+
+    if not user32.RegisterHotKey(None, HOTKEY_ID, mods | MOD_NOREPEAT, vk):
+        sys.exit(
+            f"error: RegisterHotKey failed for '{cfg['hotkey']}' "
+            "(already in use by another application?)"
+        )
+
+    print(f"Listening for {cfg['hotkey']} — Ctrl+C to exit")
+    print(f"  will toggle between: {inputs[0]} ↔ {inputs[1]}")
+
+    PM_REMOVE = 0x0001
+    msg = ctypes.wintypes.MSG()
+    try:
+        while True:
+            # PeekMessageW + sleep instead of blocking GetMessageW so that
+            # Ctrl+C (SIGINT) can be delivered between iterations.
+            if not user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
+                time.sleep(0.05)
+                continue
+            if msg.message == 0x0012:  # WM_QUIT
+                break
+            if msg.message != WM_HOTKEY:
+                continue
+
+            last = cfg.get("last_input")
+            target = inputs[1] if last == inputs[0] else inputs[0]
+
+            value, label = INPUTS[target]
+            packet = _build_setvcp(VCP_CODE, value)
+            log(f"[debug] packet: {[f'0x{b:02X}' for b in packet]}")
+
+            if _i2c_write(lib, gpu, masks, packet):
+                print(f"switched to {label}")
+                cfg["last_input"] = target
+                _save_config(cfg)
+            else:
+                print(f"error: failed to switch to {label} — run with --verbose for details")
+    except KeyboardInterrupt:
+        print("\nexiting")
+    finally:
+        user32.UnregisterHotKey(None, HOTKEY_ID)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def _build_parser() -> argparse.ArgumentParser:
@@ -222,20 +438,27 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="\n".join([
             "inputs:",
-            *[f"  {k:<8} {desc}" for k, (_, desc) in INPUTS.items()],
+            *[f"  {k:<12} {desc}" for k, (_, desc) in INPUTS.items()],
+            "",
+            "commands:",
+            "  scan         verify monitor is detected on I2C bus",
+            "  configure    interactive setup: choose two inputs and a hotkey",
+            "  daemon       listen for configured hotkey and toggle inputs",
             "",
             "examples:",
             "  lg-switch dp",
             "  lg-switch usbc",
             "  lg-switch --verbose hdmi1",
             "  lg-switch scan",
+            "  lg-switch configure",
+            "  lg-switch daemon",
         ]),
     )
     parser.add_argument(
         "input",
-        choices=[*INPUTS.keys(), "scan"],
+        choices=[*INPUTS.keys(), "scan", "configure", "daemon"],
         metavar="input",
-        help=f"target input: {{{', '.join(INPUTS)}, scan}}",
+        help=f"target input or command: {{{', '.join(INPUTS)}, scan, configure, daemon}}",
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -251,6 +474,14 @@ def main() -> None:
     parser = _build_parser()
     args   = parser.parse_args()
     _verbose = args.verbose
+
+    if args.input == "configure":
+        cmd_configure()
+        return
+
+    if args.input == "daemon":
+        cmd_daemon()
+        return
 
     lib        = _load_nvapi()
     gpu, masks = _nvapi_setup(lib)

@@ -27,7 +27,7 @@ cd lg-input-switch
 ## Usage
 
 ```
-python lg_switch.py <input> [-v]
+python lg_switch.py <input|command> [-v]
 ```
 
 ### Inputs
@@ -39,6 +39,44 @@ python lg_switch.py <input> [-v]
 | `hdmi2`  | HDMI 2 |
 | `usbc`   | USB-C / Thunderbolt |
 | `scan`   | Detect connected outputs (no switch) |
+
+### Hotkey daemon
+
+You can configure a global hotkey that toggles between two inputs without touching the keyboard shortcut or running the script manually each time.
+
+**Step 1 — configure:**
+
+```
+python lg_switch.py configure
+```
+
+Follow the prompts: choose two inputs and type a hotkey as text (e.g. `ctrl+shift+d`). This writes a `config.json` file next to the script.
+
+**Step 2 — run the daemon:**
+
+```
+python lg_switch.py daemon
+```
+
+The daemon registers the hotkey system-wide and listens in the background. Each press toggles between your two configured inputs. Press `Ctrl+C` to exit. The last active input is saved to `config.json` so the daemon picks up from the right state after a restart.
+
+#### Hotkey format
+
+Type the hotkey as `+`-separated tokens — do **not** press the keys, type the names:
+
+| Token type | Examples |
+|------------|---------|
+| Modifiers  | `ctrl`, `shift`, `alt`, `win` |
+| Letters    | `a`–`z` |
+| Digits     | `0`–`9` |
+| F-keys     | `f1`–`f12` |
+| Navigation | `insert`, `delete`, `home`, `end`, `pageup`, `pagedown`, `left`, `right`, `up`, `down` |
+| Numpad digits | `numpad0`–`numpad9` |
+| Numpad operators | `numpad+`, `numpad-`, `numpad*`, `numpad/`, `numpad.` |
+| Symbols    | `;` `:` `=` `,` `-` `_` `.` `/` `` ` `` `[` `]` `\` `'` and their shifted variants |
+| Space/Enter/Esc/Tab | `space`, `enter`, `esc`, `tab` |
+
+Examples: `ctrl+shift+d`, `alt+f1`, `ctrl+numpad1`, `ctrl+shift+;`
 
 ### Options
 
@@ -54,6 +92,8 @@ python lg_switch.py dp
 python lg_switch.py usbc
 python lg_switch.py --verbose hdmi1
 python lg_switch.py scan
+python lg_switch.py configure
+python lg_switch.py daemon
 ```
 
 ## How it works
@@ -85,6 +125,10 @@ The LG also uses a **proprietary VCP code `0xF4`** for input selection rather th
 **`nvapi64.dll` not found** — NVIDIA drivers are not installed or not on the system PATH.
 
 **All attempts fail with `err -1`** — run `python lg_switch.py scan` and check the output mask. If it returns `0x00000000`, the GPU is not detecting the monitor on its I2C bus (try a different cable or port). Run with `--verbose` to see per-attempt results.
+
+**Daemon hotkey does nothing** — another application may have registered the same hotkey. Try a different combination.
+
+**`config.json` not found when running daemon** — run `python lg_switch.py configure` first.
 
 ## Credits
 
