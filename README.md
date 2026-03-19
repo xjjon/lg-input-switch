@@ -1,4 +1,4 @@
-# lg-switch
+# lg-input-switch
 
 Command-line input switcher for the **LG 45GX950A-B** monitor on Windows for nvidia GPUs.
 
