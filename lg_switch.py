@@ -26,7 +26,11 @@ DDC_DEVICE_ADDR = 0x6E    # 0x37 << 1  (DDC/CI destination address)
 NVAPI_OK        = 0
 NVAPI_MAX_GPUS  = 64
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+CONFIG_PATH = (
+    Path(sys.executable).parent / "config.json"
+    if getattr(sys, "frozen", False)          # running as PyInstaller .exe
+    else Path(__file__).parent / "config.json"
+)
 
 _verbose = False
 

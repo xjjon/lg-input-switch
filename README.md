@@ -11,26 +11,68 @@ The fix is to bypass the Windows DDC/CI stack entirely and write the raw I2C pac
 ## Requirements
 
 - Windows 10/11
-- Python 3.10+
 - NVIDIA GPU with up-to-date drivers (RTX series confirmed working)
 - LG 45GX950A-B connected via DisplayPort or HDMI (USB-C confirmed working too)
 
-No third-party Python packages required — only the standard library.
-
 ## Installation
+
+### Option A — pre-built executables (no Python required)
+
+1. Go to the [Releases](https://github.com/meer-cha/lg-input-switch/releases) page
+2. Download `lg-configure.exe` and `lg-daemon.exe` from the latest release
+3. Put both files in the same folder
+4. Run `lg-configure.exe` first to set up your hotkey, then `lg-daemon.exe` to start listening
+
+### Option B — run from source
+
+Requires Python 3.10+. No third-party packages needed.
 
 ```
 git clone https://github.com/meer-cha/lg-input-switch.git
 cd lg-input-switch
+python lg_switch.py configure
+python lg_switch.py daemon
 ```
 
+### Option C — build the executables yourself
+
+Requires Python 3.10+ and pip.
+
+```
+git clone https://github.com/meer-cha/lg-input-switch.git
+cd lg-input-switch
+build.bat
+```
+
+The executables will be in the `dist\` folder.
+
 ## Usage
+
+### Standalone executables
+
+**Step 1 — configure** (run once):
+
+```
+lg-configure.exe
+```
+
+Follow the prompts: choose two inputs and type a hotkey as text (e.g. `ctrl+shift+d`). This writes a `config.json` file in the same folder as the executables.
+
+**Step 2 — run the daemon:**
+
+```
+lg-daemon.exe
+```
+
+The daemon registers the hotkey system-wide and listens in the background. Each press toggles between your two configured inputs. Press `Ctrl+C` to exit. The last active input is saved to `config.json` so the daemon picks up from the right state after a restart.
+
+### From source
 
 ```
 python lg_switch.py <input|command> [-v]
 ```
 
-### Inputs
+#### Inputs
 
 | Argument | Input |
 |----------|-------|
@@ -40,27 +82,25 @@ python lg_switch.py <input|command> [-v]
 | `usbc`   | USB-C / Thunderbolt |
 | `scan`   | Detect connected outputs (no switch) |
 
-### Hotkey daemon
+#### Options
 
-You can configure a global hotkey that toggles between two inputs without touching the keyboard shortcut or running the script manually each time.
+| Flag | Description |
+|------|-------------|
+| `-v`, `--verbose` | Print NVAPI debug info and per-attempt I2C results |
+| `-h`, `--help`    | Show help and exit |
 
-**Step 1 — configure:**
+#### Examples
 
 ```
+python lg_switch.py dp
+python lg_switch.py usbc
+python lg_switch.py --verbose hdmi1
+python lg_switch.py scan
 python lg_switch.py configure
-```
-
-Follow the prompts: choose two inputs and type a hotkey as text (e.g. `ctrl+shift+d`). This writes a `config.json` file next to the script.
-
-**Step 2 — run the daemon:**
-
-```
 python lg_switch.py daemon
 ```
 
-The daemon registers the hotkey system-wide and listens in the background. Each press toggles between your two configured inputs. Press `Ctrl+C` to exit. The last active input is saved to `config.json` so the daemon picks up from the right state after a restart.
-
-#### Hotkey format
+### Hotkey format
 
 Type the hotkey as `+`-separated tokens — do **not** press the keys, type the names:
 
@@ -77,24 +117,6 @@ Type the hotkey as `+`-separated tokens — do **not** press the keys, type the 
 | Space/Enter/Esc/Tab | `space`, `enter`, `esc`, `tab` |
 
 Examples: `ctrl+shift+d`, `alt+f1`, `ctrl+numpad1`, `ctrl+shift+;`
-
-### Options
-
-| Flag | Description |
-|------|-------------|
-| `-v`, `--verbose` | Print NVAPI debug info and per-attempt I2C results |
-| `-h`, `--help`    | Show help and exit |
-
-### Examples
-
-```
-python lg_switch.py dp
-python lg_switch.py usbc
-python lg_switch.py --verbose hdmi1
-python lg_switch.py scan
-python lg_switch.py configure
-python lg_switch.py daemon
-```
 
 ## How it works
 
@@ -128,7 +150,7 @@ The LG also uses a **proprietary VCP code `0xF4`** for input selection rather th
 
 **Daemon hotkey does nothing** — another application may have registered the same hotkey. Try a different combination.
 
-**`config.json` not found when running daemon** — run `python lg_switch.py configure` first.
+**`config.json` not found when running daemon** — run `lg-configure.exe` (or `python lg_switch.py configure`) first.
 
 ## Credits
 
